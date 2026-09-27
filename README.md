@@ -6,7 +6,7 @@ LabLink is a prototype for the FAU Engineering Design capstone project "Web Cont
 
 Built for the ED2 AI Hootcamp assignment, using AI tooling (Claude) to generate the code.
 
-**Deployed app:** (add Netlify link here after deploying)
+**Deployed app:** https://ed2-project.netlify.app/
 
 **Demo video:** (add unlisted YouTube link here)
 
@@ -77,7 +77,7 @@ or open `index.html` through VS Code's Live Server extension.
 1. Push the repository to GitHub.
 2. In Netlify, choose "Add new site" > "Import an existing project" and pick this repo.
 3. Leave the build command empty and set the publish directory to `.` (already set in `netlify.toml`).
-4. Deploy. Copy the site URL into this README.
+4. Deploy. The live site for this project is https://ed2-project.netlify.app/.
 
 ## How to use
 
