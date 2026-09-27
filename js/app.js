@@ -235,11 +235,187 @@ async function deleteInstrument(id) {
   await loadInstruments();
 }
 
-// ---------- control panel (next step) ----------
+// ---------- control panel ----------
 
-function openInstrument(id) {
+async function openInstrument(id) {
   state.selectedId = id;
   renderInstrumentList();
+  const i = state.instruments.find((x) => x.id === id);
+  if (!i) return;
+
+  const area = document.getElementById("control-area");
+  area.innerHTML = `
+    <div class="panel">
+      <h2>Control panel: ${esc(i.name)}</h2>
+      <p class="user">${esc(i.model || "")}${i.location ? " · " + esc(i.location) : ""} · <span class="badge ${esc(i.status)}">${esc(i.status)}</span></p>
+      ${i.notes ? `<p style="font-size:14px">${esc(i.notes)}</p>` : ""}
+      <div id="ctl-msg" class="msg hidden"></div>
+
+      <div class="grid-2">
+        <div>
+          <h3>Commands</h3>
+          <div class="controls">
+            <div class="slider-row">
+              <label for="setpoint">Setpoint</label>
+              <input type="range" id="setpoint" min="-90" max="90" step="1" value="0">
+              <output id="setpoint-out">0°</output>
+            </div>
+            <div class="slider-row">
+              <label for="voltage">Motor V</label>
+              <input type="range" id="voltage" min="-10" max="10" step="0.1" value="0">
+              <output id="voltage-out">0.0 V</output>
+            </div>
+            <div class="actions">
+              <button class="primary" data-cmd="START">Start</button>
+              <button data-cmd="STOP">Stop</button>
+              <button data-cmd="SET_SETPOINT">Send setpoint</button>
+              <button data-cmd="SET_VOLTAGE">Send voltage</button>
+              <button class="danger" data-cmd="ESTOP">Emergency stop</button>
+            </div>
+          </div>
+
+          <h3>Record experiment</h3>
+          <form id="exp-form">
+            <label>Title <input name="title" required placeholder="Step response, 15° setpoint"></label>
+            <div class="row">
+              <label>Setpoint <input name="setpoint" type="number" step="any"></label>
+              <label>Duration (s) <input name="duration_sec" type="number" min="0"></label>
+            </div>
+            <label>Result / observations <textarea name="result"></textarea></label>
+            <div class="actions"><button class="primary" type="submit">Save experiment</button></div>
+          </form>
+        </div>
+
+        <div>
+          <h3>Command log</h3>
+          <div id="cmd-log" class="log"></div>
+          <div class="actions" style="margin-top:8px"><button class="small danger" id="clear-log">Clear log</button></div>
+
+          <h3>Experiments</h3>
+          <div id="exp-list"></div>
+        </div>
+      </div>
+    </div>`;
+
+  const sp = document.getElementById("setpoint");
+  const vo = document.getElementById("voltage");
+  sp.oninput = () => (document.getElementById("setpoint-out").textContent = `${sp.value}°`);
+  vo.oninput = () => (document.getElementById("voltage-out").textContent = `${Number(vo.value).toFixed(1)} V`);
+
+  area.querySelectorAll("[data-cmd]").forEach((b) => {
+    b.onclick = () => {
+      const cmd = b.dataset.cmd;
+      let value = null;
+      if (cmd === "SET_SETPOINT") value = `${sp.value} deg`;
+      if (cmd === "SET_VOLTAGE") value = `${Number(vo.value).toFixed(1)} V`;
+      sendCommand(id, cmd, value);
+    };
+  });
+
+  document.getElementById("clear-log").onclick = () => clearLog(id);
+  document.getElementById("exp-form").onsubmit = (e) => saveExperiment(e, id);
+
+  area.scrollIntoView({ behavior: "smooth", block: "start" });
+  await Promise.all([loadLog(id), loadExperiments(id)]);
+}
+
+async function sendCommand(instrumentId, command, value) {
+  const msg = document.getElementById("ctl-msg");
+  const { error } = await db.from("command_log").insert({
+    user_id: state.user.id,
+    instrument_id: instrumentId,
+    command,
+    value,
+  });
+  if (error) return showMsg(msg, error.message);
+
+  // Reflect the command in the instrument's status so the list stays honest.
+  const newStatus = command === "START" ? "busy" : command === "STOP" || command === "ESTOP" ? "online" : null;
+  if (newStatus) {
+    await db.from("instruments").update({ status: newStatus }).eq("id", instrumentId);
+    await loadInstruments();
+  }
+  await loadLog(instrumentId);
+}
+
+async function loadLog(instrumentId) {
+  const el = document.getElementById("cmd-log");
+  const { data, error } = await db
+    .from("command_log")
+    .select("*")
+    .eq("instrument_id", instrumentId)
+    .order("sent_at", { ascending: false })
+    .limit(50);
+  if (error) return showMsg(document.getElementById("ctl-msg"), error.message);
+  if (!data.length) {
+    el.innerHTML = `<p class="empty">No commands sent yet.</p>`;
+    return;
+  }
+  el.innerHTML = data
+    .map((r) => `<div><span class="t">${new Date(r.sent_at).toLocaleTimeString()}</span>${esc(r.command)}${r.value ? " " + esc(r.value) : ""}</div>`)
+    .join("");
+}
+
+async function clearLog(instrumentId) {
+  if (!confirm("Clear the command log for this instrument?")) return;
+  const { error } = await db.from("command_log").delete().eq("instrument_id", instrumentId);
+  if (error) return showMsg(document.getElementById("ctl-msg"), error.message);
+  await loadLog(instrumentId);
+}
+
+// ---------- experiments ----------
+
+async function saveExperiment(e, instrumentId) {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  const record = {
+    user_id: state.user.id,
+    instrument_id: instrumentId,
+    title: form.get("title").trim(),
+    setpoint: form.get("setpoint") === "" ? null : Number(form.get("setpoint")),
+    duration_sec: form.get("duration_sec") === "" ? null : Number(form.get("duration_sec")),
+    result: form.get("result").trim() || null,
+  };
+  const { error } = await db.from("experiments").insert(record);
+  if (error) return showMsg(document.getElementById("ctl-msg"), error.message);
+  e.target.reset();
+  showMsg(document.getElementById("ctl-msg"), "Experiment saved.", "ok");
+  await loadExperiments(instrumentId);
+}
+
+async function loadExperiments(instrumentId) {
+  const el = document.getElementById("exp-list");
+  const { data, error } = await db
+    .from("experiments")
+    .select("*")
+    .eq("instrument_id", instrumentId)
+    .order("created_at", { ascending: false });
+  if (error) return showMsg(document.getElementById("ctl-msg"), error.message);
+  if (!data.length) {
+    el.innerHTML = `<p class="empty">No experiments recorded.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Title</th><th>Setpoint</th><th>Duration</th><th></th></tr></thead>
+      <tbody>
+        ${data.map((x) => `
+          <tr>
+            <td><strong>${esc(x.title)}</strong>${x.result ? `<br><span class="user">${esc(x.result)}</span>` : ""}<br><span class="user">${new Date(x.created_at).toLocaleString()}</span></td>
+            <td>${x.setpoint ?? ""}</td>
+            <td>${x.duration_sec != null ? x.duration_sec + " s" : ""}</td>
+            <td><button class="small danger" data-delexp="${x.id}">Delete</button></td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+  el.querySelectorAll("[data-delexp]").forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm("Delete this experiment record?")) return;
+      const { error } = await db.from("experiments").delete().eq("id", b.dataset.delexp);
+      if (error) return showMsg(document.getElementById("ctl-msg"), error.message);
+      await loadExperiments(instrumentId);
+    };
+  });
 }
 
 // ---------- boot ----------
