@@ -8,7 +8,7 @@ Built for the ED2 AI Hootcamp assignment, using AI tooling (Claude) to generate 
 
 **Deployed app:** https://ed2-project.netlify.app/
 
-**Demo video:** (add unlisted YouTube link here)
+**Demo video:** https://www.loom.com/share/a92c628a7acb4e61b339cb80ec786156
 
 ## What it does
 
